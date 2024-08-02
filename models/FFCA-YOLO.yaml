@@ -30,6 +30,8 @@ backbone:
    [-1, 1, SPPF, [512, 5]],  # 9                                             40*40*384
   ]
 
+
+
 # YOLOv5 v6.0 head
 head:
   [# 40*40 concat 80*80
