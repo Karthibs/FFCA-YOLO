@@ -1162,7 +1162,8 @@ class FEM(nn.Module):
             BasicConv((inter_planes // 2) * 3, 2 * inter_planes, kernel_size=(1, 3), stride=stride, padding=(0, 1)),
             BasicConv(2 * inter_planes, 2 * inter_planes, kernel_size=3, stride=1, padding=5, dilation=5, relu=False)
         )
-
+        
+        
         self.ConvLinear = BasicConv(6 * inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
         self.shortcut = BasicConv(in_planes, out_planes, kernel_size=1, stride=stride, relu=False)
         self.relu = nn.ReLU(inplace=False)
@@ -1197,3 +1198,112 @@ class BasicConv(nn.Module):
         if self.relu is not None:
             x = self.relu(x)
         return x
+
+import torch
+import torch.nn as nn
+
+class SEBlock(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(SEBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+class InvertedResidual(nn.Module):
+    def __init__(self, inp, oup, stride, expand_ratio):
+        super(InvertedResidual, self).__init__()
+        self.stride = stride
+        assert stride in [1, 2]
+
+        hidden_dim = round(inp * expand_ratio)
+        self.use_res_connect = self.stride == 1 and inp == oup
+
+        layers = []
+        if expand_ratio != 1:
+            layers.append(nn.Conv2d(inp, hidden_dim, 1, 1, 0, bias=False))
+            layers.append(nn.GroupNorm(32, hidden_dim))
+            layers.append(nn.ReLU6(inplace=True))
+        layers.extend([
+            nn.Conv2d(hidden_dim, hidden_dim, 3, stride, 1, groups=hidden_dim, bias=False),
+            nn.GroupNorm(32, hidden_dim),
+            nn.ReLU6(inplace=True),
+            nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
+            nn.GroupNorm(32, oup),
+        ])
+        self.conv = nn.Sequential(*layers)
+
+    def forward(self, x):
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
+class ImprovedFEM(nn.Module):
+    def __init__(self, in_planes, out_planes, stride=1, scale=0.1, map_reduce=8):
+        super(ImprovedFEM, self).__init__()
+        self.scale = scale
+        self.out_channels = out_planes
+        inter_planes = in_planes // map_reduce
+
+        self.branch0 = nn.Sequential(
+            InvertedResidual(in_planes, 2 * inter_planes, stride, expand_ratio=2),
+            SEBlock(2 * inter_planes)
+        )
+
+        self.branch1 = nn.Sequential(
+            InvertedResidual(in_planes, 2 * inter_planes, stride, expand_ratio=2),
+            nn.Conv2d(2 * inter_planes, 2 * inter_planes, kernel_size=3, stride=1, padding=5, dilation=5, bias=False),
+            nn.GroupNorm(32, 2 * inter_planes),
+            SEBlock(2 * inter_planes)
+        )
+
+        self.branch2 = nn.Sequential(
+            InvertedResidual(in_planes, 2 * inter_planes, stride, expand_ratio=2),
+            nn.Conv2d(2 * inter_planes, 2 * inter_planes, kernel_size=3, stride=1, padding=5, dilation=5, bias=False),
+            nn.GroupNorm(32, 2 * inter_planes),
+            SEBlock(2 * inter_planes)
+        )
+
+        self.global_context = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_planes, inter_planes, kernel_size=1, stride=1, bias=False),
+            nn.GroupNorm(32, inter_planes),
+            nn.ReLU(inplace=True)
+        )
+
+        self.ConvLinear = nn.Sequential(
+            nn.Conv2d(7 * inter_planes, out_planes, kernel_size=1, stride=1, bias=False),
+            nn.GroupNorm(32, out_planes)
+        )
+
+        self.shortcut = nn.Sequential(
+            nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False),
+            nn.GroupNorm(32, out_planes)
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        x0 = self.branch0(x)
+        x1 = self.branch1(x)
+        x2 = self.branch2(x)
+        x3 = self.global_context(x)
+        x3 = x3.expand_as(x0)
+
+        out = torch.cat((x0, x1, x2, x3), 1)
+        out = self.ConvLinear(out)
+        short = self.shortcut(x)
+        out = out * self.scale + short
+        out = self.relu(out)
+
+        return out
