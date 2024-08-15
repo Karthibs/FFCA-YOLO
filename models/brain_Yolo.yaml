@@ -1,16 +1,15 @@
 # YOLOv5 🚀 by Ultralytics, GPL-3.0 license
 
 # Parameters
-nc: 2  # number of classes
+nc: 1  # number of classes
 depth_multiple: 0.67  # model depth multiple
 width_multiple: 0.75  # layer channel multiple
 #depth_multiple: 1  # model depth multiple
 #width_multiple: 1  # layer channel multiple
-anchors: 3
-
-#  - [7,12,  15,6,  10,11]  # P4/16
-#  - [17,7,  10,15,  15,10]  # P5/32
-#  - [13,14,  20,10,  14,19]  # P6/64
+anchors: 
+ - [7,12,  15,6,  10,11]  # P4/16
+ - [17,7,  10,15,  15,10]  # P5/32
+ - [13,14,  20,10,  14,19]  # P6/64
 # YOLOv5 v6.0 backbone
 
 backbone:
@@ -23,10 +22,10 @@ backbone:
 
    [-2, 1, Conv, [256, 3, 2]],  # 4                                          80*80*192
    [-1, 6, C2f, [256, True]], # 5                                                   80*80*192                                  4
-   [-1, 1, FEM, [256]], # 6                                              80*80*192
+   [-1, 4, FEM, [256]], # 6                                              80*80*192
    
    [-2, 1, Conv, [512, 3, 2]],  # 7                                          40*40*384
-   [-1, 9, C2f, [512, True]], # 8                                                   40*40*384                                  6
+   [-1, 10, C2f, [512, True]], # 8                                                   40*40*384                                  6
    [-1, 1, SPPF, [512, 5]],  # 9                                             40*40*384
   ]
 
